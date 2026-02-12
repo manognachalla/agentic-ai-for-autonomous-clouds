@@ -6,6 +6,10 @@ from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.resource import ResourceManagementClient
 from azure.mgmt.monitor import MonitorManagementClient
 from google import genai
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 # -------------------------------
