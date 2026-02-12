@@ -19,6 +19,7 @@ from core.llm import get_azure_openai_client
 from agents.resource_agent import ResourceOptimizationAgent
 from agents.cost_agent import CostManagementAgent
 from agents.security_agent import SecurityComplianceAgent
+from agents.provisioning_agent import ProvisioningAgent
 
 # Import vision agents for image-to-Bicep conversion
 import sys
@@ -82,6 +83,7 @@ async def startup_event():
             AgentType.RESOURCE_OPTIMIZATION: ResourceOptimizationAgent(subscription_id),
             AgentType.COST_MANAGEMENT: CostManagementAgent(subscription_id),
             AgentType.SECURITY_COMPLIANCE: SecurityComplianceAgent(subscription_id),
+            AgentType.PROVISIONING: ProvisioningAgent(subscription_id, llm_client)
         }
         
         orchestrator = OrchestratorAgent(llm_client, agents_registry)

@@ -6,8 +6,6 @@ class CostManagementAgent(BaseAgent):
 
     def get_resource_costs(self, resource_group):
         self.log(f"Retrieving cost data for {resource_group}...")
-        # Note: In a real scenario, this would likely query the Cost Management API.
-        # For this example, we list resources as a proxy for cost centers.
         resources = self.resource_client.resources.list_by_resource_group(
             resource_group
         )

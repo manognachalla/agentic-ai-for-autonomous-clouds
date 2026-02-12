@@ -5,6 +5,9 @@ class AgentType(Enum):
     RESOURCE_OPTIMIZATION = "resource_optimization"
     COST_MANAGEMENT = "cost_management"
     SECURITY_COMPLIANCE = "security_compliance"
+    PROVISIONING = "provisioning"
+
+from core.utils import safe_llm_call
 
 class OrchestratorAgent:
     def __init__(self, llm_client, agents_registry):
@@ -21,30 +24,35 @@ class OrchestratorAgent:
         1. RESOURCE_OPTIMIZATION (keywords: idle, utilization, resize, vm size)
         2. COST_MANAGEMENT (keywords: cost, price, bill, expensive, list resources)
         3. SECURITY_COMPLIANCE (keywords: security, firewall, encryption, nsg, compliance)
+        4. PROVISIONING (keywords: deploy, create, provision, new vm, launch, setup)
         
         User Query: "{query}"
         
         Return ONLY the category name exactly as written above. If unsure, default to COST_MANAGEMENT.
         """
         
-        # Adaptation for different LLM client interfaces (Gemini/OpenAI)
-        # Assuming the passed client has a generate_content or chat completion method
-        try:
+        def _call_llm():
             if hasattr(self.llm_client, "models"): # Google GenAI style
                 response = self.llm_client.models.generate_content(
                     model="models/gemini-2.5-flash", 
                     contents=prompt
                 )
-                text = response.text.strip()
+                return response.text.strip()
             else: # Azure OpenAI style (mocked for compatibility)
-                # You would implement specific Azure OpenAI call here
-                text = "RESOURCE_OPTIMIZATION" # Default fallback for mock
+                return "RESOURCE_OPTIMIZATION" # Default fallback
+
+        # Adaptation for different LLM client interfaces (Gemini/OpenAI)
+        # Assuming the passed client has a generate_content or chat completion method
+        try:
+            text = safe_llm_call(_call_llm)
                 
             # Map text to Enum
             if "RESOURCE" in text:
                 return AgentType.RESOURCE_OPTIMIZATION
             elif "SECURITY" in text:
                 return AgentType.SECURITY_COMPLIANCE
+            elif "PROVISIONING" in text or "DEPLOY" in text or "CREATE" in text:
+                return AgentType.PROVISIONING
             else:
                 return AgentType.COST_MANAGEMENT
                 
@@ -76,6 +84,9 @@ class OrchestratorAgent:
             agent_data = {
                 "security_scan": active_agent.check_security_posture(resource_group)
             }
+        elif agent_type == AgentType.PROVISIONING:
+            # For provisioning, we pass the query directly to let the agent extract params
+            agent_data = active_agent.provision(query, resource_group)
 
         # 3. Synthesize Answer using LLM
         final_prompt = f"""
@@ -91,16 +102,19 @@ class OrchestratorAgent:
         """
         
         try:
-            if hasattr(self.llm_client, "models"):
-                response = self.llm_client.models.generate_content(
-                    model="models/gemini-2.5-flash", 
-                    contents=final_prompt
-                )
-                final_response = response.text.strip()
-            else:
-                final_response = "Simulated response: Analysis complete based on agent data."
-        except Exception:
-            final_response = "I processed the data but had trouble generating a summary."
+            def _generate_summary():
+                if hasattr(self.llm_client, "models"):
+                    response = self.llm_client.models.generate_content(
+                        model="models/gemini-2.5-flash", 
+                        contents=final_prompt
+                    )
+                    return response.text.strip()
+                else:
+                    return "Simulated response: Analysis complete based on agent data."
+
+            final_response = safe_llm_call(_generate_summary)
+        except Exception as e:
+            final_response = f"I processed the data but had trouble generating a summary. Error details: {str(e)}"
 
         return {
             "response": final_response,
