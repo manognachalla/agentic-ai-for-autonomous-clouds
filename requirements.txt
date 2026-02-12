@@ -18,3 +18,6 @@ structlog==24.1.0
 requests
 google-genai
 python-multipart
+azure-mgmt-containerinstance==10.1.0
+azure-mgmt-storage==21.1.0
+azure-storage-blob==12.19.0

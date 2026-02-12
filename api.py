@@ -29,6 +29,12 @@ except ImportError:
     GeminiVisionAgent = None
     GeminiBicepAgent = None
 
+# Import deployment agent for container deployments
+try:
+    from agents.deployment_agent import DeploymentAgent
+except ImportError:
+    DeploymentAgent = None
+
 load_dotenv()
 
 # -------------------------------------------------------------------------
@@ -279,6 +285,125 @@ async def analyze_architecture_image(file: UploadFile = File(...)):
                 os.unlink(tmp_path)
             except:
                 pass
+        raise HTTPException(status_code=500, detail=str(e))
+
+# -------------------------------------------------------------------------
+# Deployment Endpoints (Railway-style)
+# -------------------------------------------------------------------------
+
+# Global storage for deployment tracking (use Redis/DB in production)
+deployments_store = {}
+
+@app.post("/deploy/upload")
+async def upload_deployment_file(file: UploadFile = File(...)):
+    """
+    Upload project zip file for deployment
+    """
+    if not DeploymentAgent:
+        raise HTTPException(
+            status_code=501,
+            detail="Deployment agent not available"
+        )
+    
+    if not file.filename.endswith('.zip'):
+        raise HTTPException(status_code=400, detail="Only .zip files are supported")
+    
+    try:
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        
+        # Initialize deployment agent
+        subscription_id = os.getenv('AZURE_SUBSCRIPTION_ID')
+        deployment_agent = DeploymentAgent(subscription_id)
+        
+        # Upload to Azure Blob Storage
+        upload_result = deployment_agent.upload_to_storage(tmp_path)
+        
+        # Clean up temp file
+        os.unlink(tmp_path)
+        
+        return {
+            "status": "success",
+            "upload_id": upload_result["upload_id"],
+            "message": "Project uploaded successfully"
+        }
+        
+    except Exception as e:
+        if 'tmp_path' in locals():
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/deploy/start")
+async def start_deployment(request: dict):
+    """
+    Start deployment to Azure Container Instances
+    """
+    if not DeploymentAgent:
+        raise HTTPException(status_code=501, detail="Deployment agent not available")
+    
+    upload_id = request.get('upload_id')
+    app_name = request.get('app_name', 'myapp')
+    
+    if not upload_id:
+        raise HTTPException(status_code=400, detail="upload_id is required")
+    
+    try:
+        subscription_id = os.getenv('AZURE_SUBSCRIPTION_ID')
+        resource_group = os.getenv('AZURE_RESOURCE_GROUP')
+        
+        deployment_agent = DeploymentAgent(subscription_id)
+        
+        # Start deployment
+        result = deployment_agent.deploy_to_container(
+            upload_id,
+            app_name,
+            resource_group
+        )
+        
+        # Store deployment info
+        deployments_store[result['deployment_id']] = {
+            'container_group_name': result['container_group_name'],
+            'app_name': app_name,
+            'status': result['status']
+        }
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/deploy/status/{deployment_id}")
+async def get_deployment_status(deployment_id: str):
+    """
+    Get deployment status
+    """
+    if not DeploymentAgent:
+        raise HTTPException(status_code=501, detail="Deployment agent not available")
+    
+    deployment_info = deployments_store.get(deployment_id)
+    if not deployment_info:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    
+    try:
+        subscription_id = os.getenv('AZURE_SUBSCRIPTION_ID')
+        resource_group = os.getenv('AZURE_RESOURCE_GROUP')
+        
+        deployment_agent = DeploymentAgent(subscription_id)
+        
+        status = deployment_agent.get_deployment_status(
+            deployment_info['container_group_name'],
+            resource_group
+        )
+        
+        return status
+        
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
