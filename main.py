@@ -1,164 +1,219 @@
 import os
 import json
-import uuid
 from datetime import datetime
-
 from azure.identity import DefaultAzureCredential
 from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.resource import ResourceManagementClient
 from azure.mgmt.monitor import MonitorManagementClient
+from google import genai
 
-# Import the LLM from your separate file
-from hf_llm_client import HuggingFaceLLM
 
-# =====================================================
-# ENVIRONMENT
-# =====================================================
-SUBSCRIPTION_ID = os.getenv("AZURE_SUBSCRIPTION_ID")
-RESOURCE_GROUP = os.getenv("RESOURCE_GROUP")
-HF_API_TOKEN = os.getenv("HF_API_TOKEN")
+# -------------------------------
+# Gemini LLM Setup (Safe)
+# -------------------------------
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-print("Using subscription:", SUBSCRIPTION_ID)
-print("Using resource group:", RESOURCE_GROUP)
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY not set in environment variables")
 
-# =====================================================
-# BASE AGENT
-# =====================================================
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+
+# -------------------------------
+# Base Agent Class
+# -------------------------------
 class BaseAgent:
     def __init__(self, subscription_id, agent_name):
+        if not subscription_id:
+            raise ValueError("AZURE_SUBSCRIPTION_ID not set")
+
+        self.subscription_id = subscription_id
         self.agent_name = agent_name
         self.credential = DefaultAzureCredential()
-        self.compute_client = ComputeManagementClient(self.credential, subscription_id)
-        self.resource_client = ResourceManagementClient(self.credential, subscription_id)
-        self.monitor_client = MonitorManagementClient(self.credential, subscription_id)
 
-    def log(self, msg):
-        print(f"[{datetime.now()}] [{self.agent_name}] {msg}")
+        self.compute_client = ComputeManagementClient(
+            self.credential, subscription_id
+        )
+        self.resource_client = ResourceManagementClient(
+            self.credential, subscription_id
+        )
+        self.monitor_client = MonitorManagementClient(
+            self.credential, subscription_id
+        )
 
-# =====================================================
-# RESOURCE OPTIMIZATION AGENT
-# =====================================================
+    def log(self, message):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{timestamp}] [{self.agent_name}] {message}")
+
+
+# -------------------------------
+# Resource Optimization Agent
+# -------------------------------
 class ResourceOptimizationAgent(BaseAgent):
     def __init__(self, subscription_id):
         super().__init__(subscription_id, "ResourceOptimizer")
 
     def analyze_vm_utilization(self, resource_group):
-        cid = uuid.uuid4()
-        self.log(f"[CID={cid}] Analyzing VM utilization")
+        results = []
 
-        vms = self.compute_client.virtual_machines.list(resource_group)
-        return [ {
-            "vm": vm.name,
-            "size": vm.hardware_profile.vm_size,
-            "recommendation": "Review CPU & memory metrics"
-        } for vm in vms]
-
-    def identify_idle_resources(self, resource_group):
-        cid = uuid.uuid4()
-        self.log(f"[CID={cid}] Checking idle VMs")
-
-        idle = []
         vms = self.compute_client.virtual_machines.list(resource_group)
 
         for vm in vms:
-            iv = self.compute_client.virtual_machines.instance_view(resource_group, vm.name)
-            for status in iv.statuses:
+            results.append({
+                "vm": vm.name,
+                "current_size": vm.hardware_profile.vm_size
+            })
+
+        return results
+
+    def identify_idle_resources(self, resource_group):
+        idle = []
+
+        vms = self.compute_client.virtual_machines.list(resource_group)
+
+        for vm in vms:
+            instance_view = self.compute_client.virtual_machines.instance_view(
+                resource_group, vm.name
+            )
+
+            for status in instance_view.statuses:
                 if status.code == "PowerState/deallocated":
                     idle.append({
-                        "vm": vm.name,
-                        "status": "Deallocated",
-                        "action": "Delete or stop billing"
+                        "name": vm.name,
+                        "type": "VM",
+                        "status": "Deallocated"
                     })
+
         return idle
 
-    def trigger_test_log(self, resource_group):
-        cid = uuid.uuid4()
-        self.log(f"[CID={cid}] Triggering Activity Log")
 
-        rg = self.resource_client.resource_groups.get(resource_group)
-        rg.tags = rg.tags or {}
-        rg.tags["activity-log-test"] = datetime.utcnow().isoformat()
-        self.resource_client.resource_groups.create_or_update(resource_group, rg)
-
-        self.log(f"[CID={cid}] Activity Log triggered")
-
-# =====================================================
-# COST MANAGEMENT AGENT
-# =====================================================
+# -------------------------------
+# Cost Management Agent
+# -------------------------------
 class CostManagementAgent(BaseAgent):
     def __init__(self, subscription_id):
         super().__init__(subscription_id, "CostManager")
 
     def get_resource_costs(self, resource_group):
-        resources = self.resource_client.resources.list_by_resource_group(resource_group)
+        resources = self.resource_client.resources.list_by_resource_group(
+            resource_group
+        )
+
         return [{
             "name": r.name,
             "type": r.type,
-            "location": r.location,
-            "estimated_cost": "Fetch via Cost API"
+            "location": r.location
         } for r in resources]
 
-# =====================================================
-# SECURITY AGENT
-# =====================================================
+
+# -------------------------------
+# Security Compliance Agent
+# -------------------------------
 class SecurityComplianceAgent(BaseAgent):
     def __init__(self, subscription_id):
         super().__init__(subscription_id, "SecurityCompliance")
 
     def check_security_posture(self, resource_group):
         vms = self.compute_client.virtual_machines.list(resource_group)
+
         return [{
             "vm": vm.name,
-            "issues": ["Check NSG", "Verify disk encryption"]
+            "checks": [
+                "NSG configured",
+                "Disk encryption",
+                "Patch compliance"
+            ]
         } for vm in vms]
 
-# =====================================================
-# ORCHESTRATOR
-# =====================================================
+
+# -------------------------------
+# AI Orchestrator
+# -------------------------------
 class AIOrchestrator:
     def __init__(self, subscription_id):
         self.resource_agent = ResourceOptimizationAgent(subscription_id)
         self.cost_agent = CostManagementAgent(subscription_id)
         self.security_agent = SecurityComplianceAgent(subscription_id)
 
-        # ✅ Use the HuggingFace LLM from hf_llm_client.py
-        self.llm = HuggingFaceLLM()
-        print("[INFO] Using FREE Hugging Face LLM")
+    def call_llm(self, cloud_state):
+        try:
+            prompt = f"""
+You are an Autonomous Cloud Optimization AI.
+
+Return ONLY valid JSON.
+
+{{
+  "overall_risk": "",
+  "optimization_actions": [],
+  "cost_reduction_suggestions": [],
+  "security_improvements": [],
+  "confidence": ""
+}}
+
+Cloud State:
+{json.dumps(cloud_state, indent=2)}
+"""
+
+            response = gemini_client.models.generate_content(
+                model="models/gemini-2.5-flash",
+                contents=prompt
+            )
+
+            # ----- Safe extraction -----
+            if not response or not response.text:
+                raise ValueError("Empty response from Gemini")
+
+            cleaned = response.text.strip()
+
+            # Remove markdown wrappers if present
+            if cleaned.startswith("```"):
+                cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+
+            return json.loads(cleaned)
+
+        except Exception as e:
+            print(f"[LLM ERROR] {str(e)}")
+
+            return {
+                "overall_risk": "UNKNOWN",
+                "optimization_actions": [],
+                "cost_reduction_suggestions": [],
+                "security_improvements": [],
+                "confidence": "LOW (Fallback Mode)"
+            }
 
     def process_request(self, resource_group):
-        data = {
+
+        cloud_state = {
             "resource_optimization": {
                 "utilization": self.resource_agent.analyze_vm_utilization(resource_group),
-                "idle": self.resource_agent.identify_idle_resources(resource_group)
+                "idle_resources": self.resource_agent.identify_idle_resources(resource_group)
             },
-            "costs": self.cost_agent.get_resource_costs(resource_group),
+            "cost_management": self.cost_agent.get_resource_costs(resource_group),
             "security": self.security_agent.check_security_posture(resource_group)
         }
 
-        prompt = f"""
-You are an Azure cloud optimization assistant.
+        llm_decision = self.call_llm(cloud_state)
 
-Analyze this data and provide:
-1. Optimization summary
-2. Cost-saving actions
-3. Security risks
+        return {
+            "cloud_state": cloud_state,
+            "ai_decision": llm_decision
+        }
 
-DATA:
-{json.dumps(data, indent=2)}
-"""
-        data["llm_decision"] = self.llm.generate(prompt)
-        return data
 
-# =====================================================
-# MAIN
-# =====================================================
+# -------------------------------
+# Main Execution
+# -------------------------------
 if __name__ == "__main__":
+
+    SUBSCRIPTION_ID = os.getenv("AZURE_SUBSCRIPTION_ID")
+    RESOURCE_GROUP = os.getenv("AZURE_RESOURCE_GROUP")
+
+    if not RESOURCE_GROUP:
+        raise ValueError("AZURE_RESOURCE_GROUP not set")
+
     orchestrator = AIOrchestrator(SUBSCRIPTION_ID)
 
-    # Step 1: Trigger Activity Log
-    orchestrator.resource_agent.trigger_test_log(RESOURCE_GROUP)
+    results = orchestrator.process_request(RESOURCE_GROUP)
 
-    # Step 2: Run agents + LLM
-    output = orchestrator.process_request(RESOURCE_GROUP)
-
-    print(json.dumps(output, indent=2))
+    print(json.dumps(results, indent=2))
