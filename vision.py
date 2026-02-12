@@ -5,7 +5,7 @@ import base64
 import mimetypes
 import re
 
-print("\n--- 🚀 NEW v3.1 SCRIPT RUNNING (Fixes Applied) ---")
+print("\n--- NEW v3.1 SCRIPT RUNNING (Fixes Applied) ---")
 
 # --- 1. SETUP ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -24,7 +24,7 @@ def find_valid_model(api_key):
     try:
         response = requests.get(url)
         if response.status_code != 200:
-            print(f"❌ Failed to list models. Status: {response.status_code}")
+            print(f" Failed to list models. Status: {response.status_code}")
             print(f"   Response: {response.text}")
             return None
             
@@ -41,22 +41,22 @@ def find_valid_model(api_key):
         
         for priority in priorities:
             if priority in available_models:
-                print(f"   ✅ Found available model: {priority}")
+                print(f" Found available model: {priority}")
                 return priority.replace("models/", "") 
         
-        print("⚠️  Preferred models missing. Searching for fallback...")
+        print("Preferred models missing. Searching for fallback...")
         for m in data.get('models', []):
             if "generateContent" in m.get('supportedGenerationMethods', []):
                 name = m['name']
                 if "vision" in name or "flash" in name or "pro" in name:
-                    print(f"   ✅ Fallback model selected: {name}")
+                    print(f"Fallback model selected: {name}")
                     return name.replace("models/", "")
 
-        print("❌ No suitable Vision models found in your account.")
+        print("No suitable Vision models found in your account.")
         return None
         
     except Exception as e:
-        print(f"❌ Network error checking models: {e}")
+        print(f"Network error checking models: {e}")
         return None
 
 # Get the working model name dynamically
@@ -66,13 +66,13 @@ CURRENT_MODEL = find_valid_model(GOOGLE_API_KEY)
 class GeminiVisionAgent:
     def analyze_image(self, image_path: str) -> dict:
         if not CURRENT_MODEL:
-            print("❌ Cannot proceed: No valid model found.")
+            print("Cannot proceed: No valid model found.")
             return {}
 
         print(f"🔍 [Vision Agent] Analyzing image using '{CURRENT_MODEL}'...")
         
         if not os.path.exists(image_path):
-            print(f"❌ Error: File '{image_path}' not found.")
+            print(f"Error: File '{image_path}' not found.")
             return {}
         
         mime_type, _ = mimetypes.guess_type(image_path)
@@ -82,7 +82,7 @@ class GeminiVisionAgent:
             with open(image_path, "rb") as f:
                 image_data = base64.b64encode(f.read()).decode("utf-8")
         except Exception as e:
-            print(f"❌ File Read Error: {e}")
+            print(f"File Read Error: {e}")
             return {}
 
         # --- UPDATED PROMPT HERE ---
@@ -107,7 +107,7 @@ class GeminiVisionAgent:
         try:
             response = requests.post(url, json=payload)
             if response.status_code != 200:
-                print(f"❌ API FAIL (Status {response.status_code}): {response.text}")
+                print(f"API FAIL (Status {response.status_code}): {response.text}")
                 return {}
                 
             result = response.json()
@@ -119,21 +119,21 @@ class GeminiVisionAgent:
                     json_str = match.group(0)
                     return json.loads(json_str)
                 else:
-                    print("❌ No JSON found in response.")
+                    print("No JSON found in response.")
                     return {}
             except Exception as e:
-                print(f"❌ Error parsing JSON: {e}")
+                print(f"Error parsing JSON: {e}")
                 return {}
 
         except Exception as e:
-            print(f"❌ Connection Error: {e}")
+            print(f"Connection Error: {e}")
             return {}
 
 # --- 4. BICEP AGENT ---
 class GeminiBicepAgent:
     def generate_bicep(self, summary: dict) -> str:
         if not CURRENT_MODEL: return ""
-        print(f"🏗️  [Bicep Agent] Generating Infrastructure as Code...")
+        print(f"[Bicep Agent] Generating Infrastructure as Code...")
 
         # --- UPDATED PROMPT HERE ---
         prompt = (
@@ -164,7 +164,7 @@ class GeminiBicepAgent:
             # Fallback for just the code without blocks
             return raw_text.strip()
         except Exception as e:
-            print(f"❌ Error extracting Bicep code: {e}")
+            print(f"Error extracting Bicep code: {e}")
             return ""
 
 # --- 5. MAIN ---
@@ -178,14 +178,14 @@ if __name__ == "__main__":
         arch_data = vision.analyze_image(image_file)
         
         if arch_data:
-            print(f"✅ Detected Resources: {list(arch_data.keys())}")
+            print(f"Detected Resources: {list(arch_data.keys())}")
             bicep_code = coder.generate_bicep(arch_data)
             
             if bicep_code:
                 with open("main.bicep", "w") as f:
                     f.write(bicep_code)
-                print("✅ Success! 'main.bicep' file created.")
+                print("Success! 'main.bicep' file created.")
             else:
-                print("❌ Failed to generate Bicep code.")
+                print("Failed to generate Bicep code.")
         else:
-            print("❌ Vision analysis returned empty results.")
+            print("Vision analysis returned empty results.")
