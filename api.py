@@ -5,16 +5,14 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
 # --- New Imports for Orchestrator ---
-from orchestrator import OrchestratorAgent, AgentType
+from agents.orchestrator import OrchestratorAgent, AgentType
 from llm import get_azure_openai_client
 
 # Assuming your agents are accessible from 'main' or their respective files
 # Adjust import paths if you fully separated them into files (e.g., resource_agent.py)
-from main import (
-    ResourceOptimizationAgent,
-    CostManagementAgent,
-    SecurityComplianceAgent
-)
+from agents.resource_optimization_agent import ResourceOptimizationAgent
+from agents.cost_management_agent import CostManagementAgent
+from agents.security_compliance_agent import SecurityComplianceAgent
 
 load_dotenv()
 
