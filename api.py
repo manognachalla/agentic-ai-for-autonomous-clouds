@@ -1,17 +1,66 @@
+import os
+from typing import Optional, List
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from typing import Optional, List
-import os
-from dotenv import load_dotenv
+
+# --- New Imports for Orchestrator ---
+from orchestrator import OrchestratorAgent, AgentType
+from llm import get_azure_openai_client
+
+# Assuming your agents are accessible from 'main' or their respective files
+# Adjust import paths if you fully separated them into files (e.g., resource_agent.py)
+from main import (
+    ResourceOptimizationAgent,
+    CostManagementAgent,
+    SecurityComplianceAgent
+)
 
 load_dotenv()
 
+# -------------------------------------------------------------------------
+# App Definition & Global State
+# -------------------------------------------------------------------------
 app = FastAPI(
     title="Azure Agentic Cloud API",
     description="AI-powered autonomous cloud management for Azure",
-    version="1.0.0"
+    version="1.1.0"
 )
 
+# Global instances
+orchestrator: Optional[OrchestratorAgent] = None
+agents_registry = {}
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize orchestrator and agents on startup to reuse connections"""
+    global orchestrator, agents_registry
+    
+    print("Initializing Azure Agents and LLM...")
+    
+    try:
+        subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
+        if not subscription_id:
+            print("WARNING: AZURE_SUBSCRIPTION_ID not set.")
+
+        llm_client = get_azure_openai_client()
+        
+        # Initialize agents once and store in registry
+        agents_registry = {
+            AgentType.RESOURCE_OPTIMIZATION: ResourceOptimizationAgent(subscription_id),
+            AgentType.COST_MANAGEMENT: CostManagementAgent(subscription_id),
+            AgentType.SECURITY_COMPLIANCE: SecurityComplianceAgent(subscription_id),
+        }
+        
+        orchestrator = OrchestratorAgent(llm_client, agents_registry)
+        print("System initialized successfully.")
+        
+    except Exception as e:
+        print(f"Startup Error: {e}")
+
+# -------------------------------------------------------------------------
+# Pydantic Models
+# -------------------------------------------------------------------------
 class QueryRequest(BaseModel):
     query: str
     resource_group: Optional[str] = None
@@ -25,43 +74,56 @@ class AgentResponse(BaseModel):
     results: dict
     recommendations: Optional[List[dict]] = None
 
+# -------------------------------------------------------------------------
+# Core Endpoints
+# -------------------------------------------------------------------------
+
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "azure-agent-system"}
+    """Health check that also reports orchestrator status"""
+    return {
+        "status": "healthy", 
+        "service": "azure-agent-system",
+        "orchestrator_initialized": orchestrator is not None
+    }
 
 @app.get("/ready")
 async def readiness_check():
     return {"status": "ready"}
 
-@app.post("/query", response_model=AgentResponse)
+@app.post("/query")
 async def process_query(request: QueryRequest):
-    """Process natural language queries about Azure resources"""
+    """
+    Smart endpoint - automatically routes natural language to appropriate agents
+    """
+    if not orchestrator:
+        raise HTTPException(status_code=503, detail="Orchestrator not initialized")
+    
     try:
-        from main import AIOrchestrator
-        
-        subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
-        openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        openai_key = os.getenv("AZURE_OPENAI_KEY")
-        resource_group = request.resource_group or os.getenv("AZURE_RESOURCE_GROUP")
-        
-        orchestrator = AIOrchestrator(subscription_id, openai_endpoint, openai_key)
-        results = orchestrator.process_request(request.query, resource_group)
-        
-        return AgentResponse(
-            status="success",
-            results=results
+        result = orchestrator.process_query(
+            query=request.query,
+            context={
+                "resource_group": request.resource_group or os.getenv("AZURE_RESOURCE_GROUP")
+            }
         )
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# -------------------------------------------------------------------------
+# Legacy / Specific Endpoints (Preserved)
+# -------------------------------------------------------------------------
+
 @app.post("/optimize/resources", response_model=AgentResponse)
 async def optimize_resources(request: OptimizationRequest, background_tasks: BackgroundTasks):
-    """Optimize Azure resources in a resource group"""
+    """Directly trigger resource optimization agent"""
     try:
-        from main import ResourceOptimizationAgent
-        
-        subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
-        agent = ResourceOptimizationAgent(subscription_id)
+        # Reuse global agent if available, else instantiate (fallback)
+        if AgentType.RESOURCE_OPTIMIZATION in agents_registry:
+            agent = agents_registry[AgentType.RESOURCE_OPTIMIZATION]
+        else:
+            subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
+            agent = ResourceOptimizationAgent(subscription_id)
         
         utilization = agent.analyze_vm_utilization(request.resource_group)
         idle_resources = agent.identify_idle_resources(request.resource_group)
@@ -80,17 +142,21 @@ async def optimize_resources(request: OptimizationRequest, background_tasks: Bac
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/analyze/costs")
+@app.post("/analyze/costs", response_model=AgentResponse)
 async def analyze_costs(request: OptimizationRequest):
-    """Analyze costs for a resource group"""
+    """Directly trigger cost management agent"""
     try:
-        from main import CostManagementAgent
-        
-        subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
-        agent = CostManagementAgent(subscription_id)
+        if AgentType.COST_MANAGEMENT in agents_registry:
+            agent = agents_registry[AgentType.COST_MANAGEMENT]
+        else:
+            subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
+            agent = CostManagementAgent(subscription_id)
         
         costs = agent.get_resource_costs(request.resource_group)
-        recommendations = agent.generate_savings_recommendations(request.resource_group)
+        # Assuming generate_savings_recommendations exists in your agent, or we skip it
+        recommendations = [] 
+        if hasattr(agent, "generate_savings_recommendations"):
+            recommendations = agent.generate_savings_recommendations(request.resource_group)
         
         return AgentResponse(
             status="success",
@@ -100,14 +166,15 @@ async def analyze_costs(request: OptimizationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/check/security")
+@app.post("/check/security", response_model=AgentResponse)
 async def check_security(request: OptimizationRequest):
-    """Check security posture of resources"""
+    """Directly trigger security agent"""
     try:
-        from main import SecurityComplianceAgent
-        
-        subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
-        agent = SecurityComplianceAgent(subscription_id)
+        if AgentType.SECURITY_COMPLIANCE in agents_registry:
+            agent = agents_registry[AgentType.SECURITY_COMPLIANCE]
+        else:
+            subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
+            agent = SecurityComplianceAgent(subscription_id)
         
         issues = agent.check_security_posture(request.resource_group)
         
