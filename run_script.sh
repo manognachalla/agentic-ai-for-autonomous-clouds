@@ -190,9 +190,10 @@ echo "1) Run main.py (Direct execution)"
 echo "2) Run API server (api.py with uvicorn)"
 echo "3) Run with Docker Compose"
 echo "4) Run tests only"
-echo "5) Exit"
+echo "5) Run frontend (React dev server)"
+echo "6) Exit"
 
-read -p "Enter choice [1-5]: " choice
+read -p "Enter choice [1-6]: " choice
 
 case $choice in
     1)
@@ -250,6 +251,29 @@ case $choice in
         fi
         ;;
     5)
+        print_header "Running Frontend Dev Server"
+        
+        # Check if frontend directory exists
+        if [ ! -d "frontend" ]; then
+            print_error "frontend directory not found!"
+            print_info "Please create the frontend first."
+            exit 1
+        fi
+        
+        # Check if node_modules exists
+        if [ ! -d "frontend/node_modules" ]; then
+            print_info "Installing frontend dependencies..."
+            cd frontend
+            npm install
+            cd ..
+        fi
+        
+        print_info "Starting React dev server on http://localhost:5173"
+        print_info "Make sure the backend API is running on http://localhost:8000"
+        cd frontend
+        npm run dev
+        ;;
+    6)
         print_info "Exiting..."
         exit 0
         ;;

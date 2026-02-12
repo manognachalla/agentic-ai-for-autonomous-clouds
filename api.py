@@ -4,8 +4,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import base64
+import tempfile
 
 # --- New Imports for Orchestrator ---
 from agents.orchestrator import OrchestratorAgent, AgentType
@@ -17,6 +20,15 @@ from agents.resource_agent import ResourceOptimizationAgent
 from agents.cost_agent import CostManagementAgent
 from agents.security_agent import SecurityComplianceAgent
 
+# Import vision agents for image-to-Bicep conversion
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), 'core'))
+try:
+    from core.vision import GeminiVisionAgent, GeminiBicepAgent
+except ImportError:
+    GeminiVisionAgent = None
+    GeminiBicepAgent = None
+
 load_dotenv()
 
 # -------------------------------------------------------------------------
@@ -27,6 +39,19 @@ app = FastAPI(
     description="AI-powered autonomous cloud management for Azure",
     version="1.1.0"
 )
+
+# Add CORS middleware to allow frontend requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],  # Frontend dev server
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+async def root():
+    return {"message": "Azure Agentic Cloud API is running", "docs_url": "/docs"}
 
 # Global instances
 orchestrator: Optional[OrchestratorAgent] = None
@@ -184,6 +209,76 @@ async def check_security(request: OptimizationRequest):
             results={"security_issues": issues}
         )
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# -------------------------------------------------------------------------
+# Vision Endpoint (Image to Bicep)
+# -------------------------------------------------------------------------
+
+@app.post("/vision/analyze")
+async def analyze_architecture_image(file: UploadFile = File(...)):
+    """
+    Upload an architecture diagram image and generate Bicep deployment code
+    """
+    if not GeminiVisionAgent or not GeminiBicepAgent:
+        raise HTTPException(
+            status_code=501,
+            detail="Vision agents not available. Check core/vision.py import."
+        )
+    
+    # Validate file type
+    if not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    
+    try:
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        
+        # Initialize vision agents
+        vision_agent = GeminiVisionAgent()
+        bicep_agent = GeminiBicepAgent()
+        
+        # Analyze image
+        print(f"Analyzing uploaded image: {file.filename}")
+        architecture_data = vision_agent.analyze_image(tmp_path)
+        
+        if not architecture_data:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not extract architecture information from image"
+            )
+        
+        # Generate Bicep code
+        print("Generating Bicep code from architecture...")
+        bicep_code = bicep_agent.generate_bicep(architecture_data)
+        
+        if not bicep_code:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not generate Bicep code from architecture data"
+            )
+        
+        # Clean up temp file
+        os.unlink(tmp_path)
+        
+        return {
+            "status": "success",
+            "architecture_data": architecture_data,
+            "bicep_code": bicep_code
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Clean up temp file on error
+        if 'tmp_path' in locals():
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

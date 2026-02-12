@@ -17,3 +17,4 @@ aiohttp==3.9.3
 structlog==24.1.0
 requests
 google-genai
+python-multipart
