@@ -14,10 +14,38 @@ class OrchestratorAgent:
         self.llm_client = llm_client
         self.agents_registry = agents_registry
 
+    def _identify_intent_fast(self, query):
+        """
+        Fast keyword-based intent detection (no LLM required)
+        """
+        query_lower = query.lower()
+        
+        # Simple keyword matching - instant response
+        if any(word in query_lower for word in ['idle', 'utilization', 'utilize', 'resize', 'underutilized', 'vm size']):
+            return AgentType.RESOURCE_OPTIMIZATION
+        elif any(word in query_lower for word in ['cost', 'price', 'bill', 'billing', 'expensive', 'list', 'resources', 'show']):
+            return AgentType.COST_MANAGEMENT
+        elif any(word in query_lower for word in ['security', 'firewall', 'nsg', 'compliance', 'secure', 'encrypt']):
+            return AgentType.SECURITY_COMPLIANCE
+        elif any(word in query_lower for word in ['deploy', 'create', 'provision', 'launch', 'setup', 'new vm']):
+            return AgentType.PROVISIONING
+        
+        # Return None for ambiguous queries (will fall back to LLM)
+        return None
+    
     def _identify_intent(self, query):
         """
         Uses LLM to classify the user query into an AgentType.
+        Falls back to fast keyword matching first.
         """
+        # Try fast path first
+        fast_result = self._identify_intent_fast(query)
+        if fast_result is not None:
+            print(f"Fast-path match: {fast_result.value}")
+            return fast_result
+        
+        # Fall back to LLM for ambiguous queries
+        print("Using LLM for intent classification...")
         prompt = f"""
         You are an Azure Cloud Orchestrator. 
         Classify the following user query into one of these categories:
@@ -88,33 +116,66 @@ class OrchestratorAgent:
             # For provisioning, we pass the query directly to let the agent extract params
             agent_data = active_agent.provision(query, resource_group)
 
-        # 3. Synthesize Answer using LLM
-        final_prompt = f"""
-        You are a helpful Cloud Assistant.
+        # 3. Generate response - use simple formatting for fast queries, LLM only if needed
+        # For most queries, we can just return the data directly without LLM synthesis
+        # This saves 2-5 seconds per query
         
-        User Query: {query}
-        Context: {context}
+        # Generate a simple response based on agent type
+        if agent_type == AgentType.COST_MANAGEMENT:
+            resources = agent_data.get('resources', [])
+            final_response = f"Found {len(resources)} resources in {resource_group}:\n\n"
+            for r in resources[:10]:  # Limit to first 10
+                final_response += f"- {r['name']} ({r['type']}) in {r['location']}\n"
+            if len(resources) > 10:
+                final_response += f"\n... and {len(resources) - 10} more resources."
         
-        Data retrieved from Azure Agent ({agent_type.name}):
-        {json.dumps(agent_data, indent=2)}
+        elif agent_type == AgentType.RESOURCE_OPTIMIZATION:
+            utilization = agent_data.get('utilization', [])
+            idle_vms = agent_data.get('idle_vms', [])
+            final_response = f"Resource Optimization Analysis:\n\n"
+            final_response += f"VMs analyzed: {len(utilization)}\n"
+            final_response += f"Idle/deallocated VMs: {len(idle_vms)}\n\n"
+            if idle_vms:
+                final_response += "Idle resources:\n"
+                for vm in idle_vms:
+                    final_response += f"- {vm['name']} ({vm['status']})\n"
         
-        Please provide a concise, human-readable answer to the user based on this data.
-        """
+        elif agent_type == AgentType.SECURITY_COMPLIANCE:
+            security_scan = agent_data.get('security_scan', [])
+            final_response = f"Security scan found {len(security_scan)} potential issues.\n\n"
+            for issue in security_scan[:5]:  # Show first 5 issues
+                final_response += f"- {issue}\n"
         
-        try:
-            def _generate_summary():
-                if hasattr(self.llm_client, "models"):
-                    response = self.llm_client.models.generate_content(
-                        model="models/gemini-2.5-flash", 
-                        contents=final_prompt
-                    )
-                    return response.text.strip()
-                else:
-                    return "Simulated response: Analysis complete based on agent data."
+        elif agent_type == AgentType.PROVISIONING:
+            # Provisioning might need more context, keep LLM for this
+            final_prompt = f"""
+            You are a helpful Cloud Assistant.
+            
+            User Query: {query}
+            Context: {context}
+            
+            Provisioning result:
+            {json.dumps(agent_data, indent=2)}
+            
+            Please provide a concise summary of what was provisioned.
+            """
+            try:
+                def _generate_summary():
+                    if hasattr(self.llm_client, "models"):
+                        response = self.llm_client.models.generate_content(
+                            model="models/gemini-2.5-flash", 
+                            contents=final_prompt
+                        )
+                        return response.text.strip()
+                    else:
+                        return "Provisioning request processed."
 
-            final_response = safe_llm_call(_generate_summary)
-        except Exception as e:
-            final_response = f"I processed the data but had trouble generating a summary. Error details: {str(e)}"
+                final_response = safe_llm_call(_generate_summary)
+            except Exception as e:
+                final_response = f"Provisioning completed. Details: {json.dumps(agent_data, indent=2)}"
+        
+        else:
+            final_response = f"Query processed successfully. Results: {json.dumps(agent_data, indent=2)}"
 
         return {
             "response": final_response,
